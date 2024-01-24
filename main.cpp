@@ -6,7 +6,7 @@ using namespace cpptcp;
 class MyTcpServer : public TcpServer
 {
 public:
-    MyTcpServer() {}
+    MyTcpServer(uint16_t port) : TcpServer(port){}
     ~MyTcpServer() {}
 
 	virtual void onConnect(std::shared_ptr<Session> pSession) override {
@@ -26,8 +26,8 @@ public:
 
 int main()
 {
-    MyTcpServer server;
-    server.start(8000);
+    MyTcpServer server(8000);
+    server.start();
     
     return 0;
 }

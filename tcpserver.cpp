@@ -1,30 +1,93 @@
 ﻿
 #include "tcpserver.h"
-#include <functional>
 #include <iostream>
-
 namespace cpptcp
 {
 
-void Session::close()
+TcpServer::TcpServer(uint16_t port) 
+: acceptor_(ioctx_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port))
 {
-	if (m_socket.is_open()) {
-		asio::error_code ec;
-		m_socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
-		m_socket.close(ec);
-		server.onClose(ip);
+
+}
+
+TcpServer::~TcpServer()
+{
+	ioctx_.stop();
+}
+
+void TcpServer::start()
+{
+	accept();
+	while (1) {
+		try {
+			ioctx_.run();
+			break;
+		} catch (const std::exception &e) {
+			//std::cerr << "io_context run occur exception: " << e.what() << std::endl;
+		}
 	}
 }
 
-const std::string & Session::address()
+void TcpServer::destroy(std::shared_ptr<Session> pSession)
 {
-	if (ip.empty() && m_socket.is_open()) {
+	sessions_.erase(pSession);
+}
+
+void TcpServer::accept()
+{
+	std::shared_ptr<Session> pSession = std::make_shared<Session>(*this, ioctx_);
+	if (!pSession) {
+		return;
+	}	
+	auto callback = [pSession, this](asio::error_code ec){
+		if (!ec) {
+			sessions_.insert(pSession);
+			pSession->set_keepalive();
+			onConnect(pSession);
+			pSession->async_recv_msg();
+		}
+		accept();
+	};
+
+	acceptor_.async_accept(pSession->getSocket(), callback);
+}
+
+Session::Session(TcpServer &srv, asio::io_context &ioctx) 
+: server_(srv), socket_(ioctx) 
+{
+
+}
+
+Session::~Session()
+{ 
+	close(); 
+}
+
+void Session::close()
+{
+	if (socket_.is_open()) {
 		asio::error_code ec;
-		auto endpoint = m_socket.remote_endpoint(ec);
-		if (!ec)
-			ip = std::move(endpoint.address().to_string());
+		socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+		socket_.close(ec);
+		server_.onClose(ip_);
 	}
-	return ip;
+}
+
+const std::string& Session::address()
+{
+	if (ip_.empty() && socket_.is_open()) {
+		asio::error_code ec;
+		auto endpoint = socket_.remote_endpoint(ec);
+		if (!ec) {
+			ip_ = endpoint.address().to_string();
+		}	
+	}
+	return ip_;
+}
+
+asio::ip::tcp::socket& Session::getSocket()
+{
+	return socket_;
 }
 
 void Session::async_send_msg(const std::string &message)
@@ -32,36 +95,36 @@ void Session::async_send_msg(const std::string &message)
 	auto self(this->shared_from_this());
 	auto callback = [self, this](asio::error_code ec, std::size_t n){
 		if (!ec) {
-			server.onSend(self);
+			server_.onSend(self);
 		} else {
-			server.destroy(self);
+			server_.destroy(self);
 		}
 	};
-	asio::async_write(m_socket, asio::buffer(message), callback);
+	asio::async_write(socket_, asio::buffer(message), callback);
 }
 
 void Session::Session::async_recv_msg()
 {	
 	std::shared_ptr<std::string> message = std::make_shared<std::string>();
-	message->resize(64 * 1024);
+	message->resize(kMaxMessageSize);
 	auto self(this->shared_from_this());
 	auto callback = [self, this, message](asio::error_code ec, std::size_t n){
 		if (!ec) {
 			message->resize(n);
-			server.onMessage(*message, self);
+			server_.onMessage(*message, self);
 			async_recv_msg();
 		} else {
-			server.destroy(self);
+			server_.destroy(self);
 		}
 	};
 
-	asio::async_read(m_socket, asio::buffer(*message), asio::transfer_at_least(1), callback);
+	asio::async_read(socket_, asio::buffer(*message), asio::transfer_at_least(1), callback);
 }
 
 void Session::set_keepalive()
 {
 #ifdef __linux__
-	auto handle = m_socket.native_handle();
+	auto handle = socket_.native_handle();
 	int keepAlive = 1; 		// 开启keepalive属性
 	int keepIdle = 60;		// 如该连接在60秒内没有任何数据往来,则进行探测 
 	int keepInterval = 3; 	//探测时发包的时间间隔为3秒
@@ -71,38 +134,6 @@ void Session::set_keepalive()
 	setsockopt(handle, SOL_TCP, TCP_KEEPINTVL, (void *)&keepInterval, sizeof(keepInterval));
 	setsockopt(handle, SOL_TCP, TCP_KEEPCNT, (void *)&keepCount, sizeof(keepCount));
 #endif
-}
-
-void TcpServer::start(uint16_t port)
-{
-	m_acceptor = asio::ip::tcp::acceptor(m_ioctx, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), port));
-	accept();
-	while (1) {
-		try {
-			m_ioctx.run();
-			break;
-		} catch (const std::exception &e) {
-			//std::cerr << "io_context run occur exception: " << e.what() << std::endl;
-		}
-	}
-}
-
-void TcpServer::accept()
-{
-	std::shared_ptr<Session> pSession = std::make_shared<Session>(*this, m_ioctx);
-	if (!pSession)
-		return;
-	auto callback = [pSession, this](asio::error_code ec){
-		if (!ec) {
-			m_sessions.insert(pSession);
-			pSession->set_keepalive();
-			onConnect(pSession);
-			pSession->async_recv_msg();
-		}
-		accept();
-	};
-
-	m_acceptor.async_accept(pSession->getSocket(), callback);
 }
 
 }
