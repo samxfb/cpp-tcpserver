@@ -1,5 +1,5 @@
 # cpp-tcpserver
-Wrapping the Asio library to create a simple HTTP server.
+Wrapping the Asio library to create a simple tcp server.
 
 Mac and Linux is supported
 
